@@ -170,25 +170,17 @@ _BluetoothFindDeviceClose = _bthprops.BluetoothFindDeviceClose
 _BluetoothFindDeviceClose.argtypes = (c_void_p,)
 _BluetoothFindDeviceClose.restype = BOOL
 
-DEVPKEY_Bluetooth_Battery = DEVPROPKEY(
-	GUID("{104EA319-6EE2-4701-BD47-8DDBF425BBE5}"), 2
-)
+DEVPKEY_Bluetooth_Battery = DEVPROPKEY(GUID("{104EA319-6EE2-4701-BD47-8DDBF425BBE5}"), 2)
 DEVPKEY_NAME = DEVPROPKEY(GUID("{B725F130-47EF-101A-A5F1-02608C9EEBAC}"), 10)
-DEVPKEY_Device_FriendlyName = DEVPROPKEY(
-	GUID("{A45C254E-DF1C-4EFD-8020-67D146A850E0}"), 14
-)
-DEVPKEY_Device_DevNodeStatus = DEVPROPKEY(
-	GUID("{4340A6C5-93FA-4706-972C-7B648008A5A7}"), 2
-)
+DEVPKEY_Device_FriendlyName = DEVPROPKEY(GUID("{A45C254E-DF1C-4EFD-8020-67D146A850E0}"), 14)
+DEVPKEY_Device_DevNodeStatus = DEVPROPKEY(GUID("{4340A6C5-93FA-4706-972C-7B648008A5A7}"), 2)
 
 
 def _getInstanceId(devInfo: SP_DEVINFO_DATA) -> str | None:
 	buffer = ctypes.create_unicode_buffer(MAX_DEVICE_ID_LEN + 1)
 	result = CM_Get_Device_ID(devInfo.DevInst, buffer, len(buffer), 0)
 	if result != CR_SUCCESS:
-		log.debugWarning(
-			f"CM_Get_Device_ID failed for devInst {devInfo.DevInst}: {result}"
-		)
+		log.debugWarning(f"CM_Get_Device_ID failed for devInst {devInfo.DevInst}: {result}")
 		return None
 	return buffer.value or None
 
@@ -212,9 +204,7 @@ def _readRegistryString(
 	lastError = ctypes.GetLastError()
 	if lastError != SystemErrorCodes.INSUFFICIENT_BUFFER or requiredSize.value == 0:
 		return None
-	buffer = ctypes.create_unicode_buffer(
-		max(1, requiredSize.value // sizeof(ctypes.c_wchar))
-	)
+	buffer = ctypes.create_unicode_buffer(max(1, requiredSize.value // sizeof(ctypes.c_wchar)))
 	if not SetupDiGetDeviceRegistryProperty(
 		deviceInfoSet,
 		byref(devInfo),
@@ -248,9 +238,7 @@ def _readDevicePropertyString(
 	lastError = ctypes.GetLastError()
 	if lastError != SystemErrorCodes.INSUFFICIENT_BUFFER or requiredSize.value == 0:
 		return None
-	buffer = ctypes.create_unicode_buffer(
-		max(1, requiredSize.value // sizeof(ctypes.c_wchar))
-	)
+	buffer = ctypes.create_unicode_buffer(max(1, requiredSize.value // sizeof(ctypes.c_wchar)))
 	if not SetupDiGetDeviceProperty(
 		deviceInfoSet,
 		byref(devInfo),
@@ -336,18 +324,12 @@ def _collectClassicConnectionStates() -> dict[str, bool]:
 		while True:
 			searchParams = BLUETOOTH_DEVICE_SEARCH_PARAMS(radioHandle)
 			deviceInfo = BLUETOOTH_DEVICE_INFO()
-			deviceFindHandle = _BluetoothFindFirstDevice(
-				byref(searchParams), byref(deviceInfo)
-			)
+			deviceFindHandle = _BluetoothFindFirstDevice(byref(searchParams), byref(deviceInfo))
 			if deviceFindHandle:
 				try:
 					while True:
-						results[f"{deviceInfo.address:012X}"] = bool(
-							deviceInfo.fConnected
-						)
-						if not _BluetoothFindNextDevice(
-							deviceFindHandle, byref(deviceInfo)
-						):
+						results[f"{deviceInfo.address:012X}"] = bool(deviceInfo.fConnected)
+						if not _BluetoothFindNextDevice(deviceFindHandle, byref(deviceInfo)):
 							break
 				finally:
 					_BluetoothFindDeviceClose(deviceFindHandle)
@@ -427,10 +409,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			address = _extractBluetoothAddress(instanceId)
 			name = _readDeviceName(deviceInfoSet, devInfo) or instanceId
 			devInst = int(devInfo.DevInst)
-			if (
-				upperId.startswith(_BLUETOOTH_ROOT_INSTANCE_ID_PREFIXES)
-				and address is not None
-			):
+			if upperId.startswith(_BLUETOOTH_ROOT_INSTANCE_ID_PREFIXES) and address is not None:
 				rootNames[address] = name
 				rootDevInsts[address] = devInst
 
@@ -459,10 +438,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			rootDevInsts.get(candidate.address or ""),
 			classicConnectionStates,
 		)
-		if (
-			config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED]
-			and status != ConnectionStatus.CONNECTED
-		):
+		if config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] and status != ConnectionStatus.CONNECTED:
 			continue
 		key = candidate.address or candidate.instanceId
 		finalDevices[key] = BluetoothDevice(
@@ -517,8 +493,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			deviceReports.append(
 				# Translators: Reported for each Bluetooth device.
 				# {name} is the device name and {battery} is the battery percentage.
-				_("{name} battery {battery} percent").format(
-					name=device.name, battery=device.battery
-				),
+				_("{name} battery {battery} percent").format(name=device.name, battery=device.battery),
 			)
 		ui.message("; ".join(deviceReports))

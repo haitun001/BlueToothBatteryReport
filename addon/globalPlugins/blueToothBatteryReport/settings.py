@@ -32,9 +32,7 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 			# Translators: A checkbox to toggle whether only connected Bluetooth devices should be reported.
 			wx.CheckBox(self, label=_("Only report &connected devices")),
 		)
-		self._onlyReportConnectedCheckbox.SetValue(
-			config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED]
-		)
+		self._onlyReportConnectedCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED])
 
 	def onSave(self) -> None:
 		config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] = (

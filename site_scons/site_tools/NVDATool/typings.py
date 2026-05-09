@@ -6,12 +6,16 @@ class AddonInfo(TypedDict):
 	addon_summary: str
 	addon_description: str
 	addon_version: str
+	addon_changelog: str
 	addon_author: str
 	addon_url: str | None
+	addon_sourceURL: str | None
 	addon_docFileName: str
 	addon_minimumNVDAVersion: str | None
 	addon_lastTestedNVDAVersion: str | None
 	addon_updateChannel: str | None
+	addon_license: str | None
+	addon_licenseURL: str | None
 
 
 class BrailleTableAttributes(TypedDict):

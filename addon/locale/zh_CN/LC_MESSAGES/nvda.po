@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: BlueToothBatteryReport 0.3\n"
 "Report-Msgid-Bugs-To: 'nvda-translations@groups.io'\n"
-"POT-Creation-Date: 2026-05-09 09:38+0800\n"
+"POT-Creation-Date: 2026-05-09 14:19+0800\n"
 "PO-Revision-Date: 2026-04-10 00:00+0800\n"
 "Last-Translator: OpenAI Codex\n"
 "Language-Team: Simplified Chinese\n"
@@ -20,39 +20,47 @@ msgstr ""
 #. Translators: Summary/title for this add-on
 #. to be shown on installation and add-on information found in add-on store
 #: addon\globalPlugins\blueToothBatteryReport\settings.py:27
-#: addon\globalPlugins\blueToothBatteryReport\__init__.py:190 buildVars.py:25
+#: addon\globalPlugins\blueToothBatteryReport\__init__.py:57 buildVars.py:21
 msgid "Bluetooth Battery Report"
 msgstr "蓝牙电量播报"
 
 #. Translators: A checkbox to toggle whether only connected Bluetooth devices should be reported.
-#: addon\globalPlugins\blueToothBatteryReport\settings.py:34
+#: addon\globalPlugins\blueToothBatteryReport\settings.py:33
 msgid "Only report &connected devices"
 msgstr "仅播报已连接的设备(&C)"
 
 #. Translators: Description for the command to report Bluetooth battery levels.
-#: addon\globalPlugins\blueToothBatteryReport\__init__.py:661
+#: addon\globalPlugins\blueToothBatteryReport\__init__.py:472
 msgid "Reports the battery percentage of all local Bluetooth devices."
 msgstr "播报本机所有蓝牙设备电量。"
 
 #. Translators: Message reported when Bluetooth battery detection fails.
-#: addon\globalPlugins\blueToothBatteryReport\__init__.py:672
+#: addon\globalPlugins\blueToothBatteryReport\__init__.py:483
 msgid "Bluetooth battery detection failed."
 msgstr "蓝牙电量检测失败。"
 
 #. Translators: Message reported when no Bluetooth battery information is available.
-#: addon\globalPlugins\blueToothBatteryReport\__init__.py:677
+#: addon\globalPlugins\blueToothBatteryReport\__init__.py:488
 msgid "No Bluetooth battery information is available."
 msgstr "没有可用的蓝牙电量信息。"
 
 #. Translators: Reported for each Bluetooth device.
 #. {name} is the device name and {battery} is the battery percentage.
-#: addon\globalPlugins\blueToothBatteryReport\__init__.py:685
+#: addon\globalPlugins\blueToothBatteryReport\__init__.py:496
 #, python-brace-format
 msgid "{name} battery {battery} percent"
 msgstr "{name} 电量 {battery}%"
 
 #. Add-on description
 #. Translators: Long description to be shown for this add-on on add-on information from add-on store
-#: buildVars.py:28
+#: buildVars.py:24
 msgid "Use NVDA+Control+Shift+B to report Bluetooth device battery levels."
 msgstr "使用 NVDA+Control+Shift+B 播报蓝牙设备电量。"
+
+#. Brief changelog for this version
+#. Translators: what's new content for the add-on version to be shown in the add-on store
+#: buildVars.py:29
+msgid ""
+"Refactored add-on structure and aligned packaging with the latest add-on "
+"template."
+msgstr ""
