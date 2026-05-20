@@ -23,10 +23,14 @@ addon_info = AddonInfo(
 	# Translators: Long description to be shown for this add-on on add-on information from add-on store
 	addon_description=_("Use NVDA+Control+Shift+B to report Bluetooth device battery levels."),
 	# version
-	addon_version="0.3",
+	addon_version="0.4",
 	# Brief changelog for this version
 	# Translators: what's new content for the add-on version to be shown in the add-on store
-	addon_changelog=_("Refactored add-on structure and aligned packaging with the latest add-on template."),
+	addon_changelog=_(
+		"Changed the hotkey to NVDA+Shift+Ctrl+B to avoid possible conflicts, "
+		"and added a Bluetooth Battery Report category in NVDA Settings with an option "
+		"to filter devices by connection type.",
+	),
 	# Author(s)
 	addon_author="haitun001 <476947039@qq.com>, cary-rowen <manchen_0528@outlook.com>",
 	# URL for the add-on documentation support
