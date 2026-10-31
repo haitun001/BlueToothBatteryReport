@@ -11,6 +11,8 @@ from gui import guiHelper, nvdaControls
 from gui.settingsDialogs import SettingsPanel
 import wx
 
+from .statsDialog import showStatistics
+
 
 addonHandler.initTranslation()
 
@@ -22,6 +24,7 @@ CONF_KEY_REPORT_UNKNOWN: str = "reportUnknown"
 CONF_KEY_REPORT_DISCONNECTED: str = "reportDisconnected"
 CONF_KEY_SHOW_CONNECTION_TYPE: str = "showConnectionType"
 CONF_KEY_SHOW_CONNECTION_DURATION: str = "showConnectionDuration"
+CONF_KEY_TRACK_CONNECTION_TIME: str = "trackConnectionTime"
 CONF_KEY_ENABLE_LOW_BATTERY_ALERT: str = "enableLowBatteryAlert"
 CONF_KEY_LOW_BATTERY_THRESHOLD: str = "lowBatteryThreshold"
 CONF_KEY_ALERT_SOUND_MODE: str = "alertSoundMode"
@@ -38,6 +41,7 @@ config.conf.spec[CONF_SECTION] = {
 	CONF_KEY_REPORT_DISCONNECTED: "boolean(default=true)",
 	CONF_KEY_SHOW_CONNECTION_TYPE: "boolean(default=false)",
 	CONF_KEY_SHOW_CONNECTION_DURATION: "boolean(default=false)",
+	CONF_KEY_TRACK_CONNECTION_TIME: "boolean(default=false)",
 	CONF_KEY_ENABLE_LOW_BATTERY_ALERT: "boolean(default=false)",
 	CONF_KEY_LOW_BATTERY_THRESHOLD: "integer(default=20, min=5, max=50)",
 	CONF_KEY_ALERT_SOUND_MODE: f"option({ALERT_SOUND_BEEP!r}, {ALERT_SOUND_CUSTOM!r}, default={ALERT_SOUND_BEEP!r})",
@@ -96,6 +100,21 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 			config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION],
 		)
 
+		self._trackConnectionTimeCheckbox: wx.CheckBox = helper.addItem(
+			# Translators: A checkbox to toggle the measurement of the total connection time of each device
+			# between two recharges. It is used by the connection duration and by the statistics.
+			wx.CheckBox(self, label=_("&Measure total connection time between recharges")),
+		)
+		self._trackConnectionTimeCheckbox.SetValue(
+			config.conf[CONF_SECTION][CONF_KEY_TRACK_CONNECTION_TIME],
+		)
+
+		self._viewStatsButton: wx.Button = helper.addItem(
+			# Translators: The label of a button that opens the window with the battery statistics.
+			wx.Button(self, label=_("&View battery statistics...")),
+		)
+		self._viewStatsButton.Bind(wx.EVT_BUTTON, self._onViewStats)
+
 		self._enableLowBatteryAlertCheckbox: wx.CheckBox = helper.addItem(
 			# Translators: A checkbox to toggle the alert that is given when the battery of a connected
 			# Bluetooth device is low.
@@ -142,6 +161,9 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 		self._browseButton.Bind(wx.EVT_BUTTON, self._onBrowse)
 		self._updateAlertControls()
 
+	def _onViewStats(self, evt: wx.CommandEvent) -> None:
+		showStatistics(self)
+
 	def _updateAlertControls(self) -> None:
 		enabled = self._enableLowBatteryAlertCheckbox.GetValue()
 		custom = _ALERT_SOUND_MODES[self._soundModeChoice.GetSelection()] == ALERT_SOUND_CUSTOM
@@ -172,6 +194,9 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] = self._showConnectionTypeCheckbox.GetValue()
 		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION] = (
 			self._showConnectionDurationCheckbox.GetValue()
+		)
+		config.conf[CONF_SECTION][CONF_KEY_TRACK_CONNECTION_TIME] = (
+			self._trackConnectionTimeCheckbox.GetValue()
 		)
 		config.conf[CONF_SECTION][CONF_KEY_ENABLE_LOW_BATTERY_ALERT] = (
 			self._enableLowBatteryAlertCheckbox.GetValue()

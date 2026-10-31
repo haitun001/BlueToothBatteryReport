@@ -20,6 +20,7 @@ from comtypes import GUID
 import config
 import core
 import globalPluginHandler
+import globalVars
 from gui.message import MessageDialog
 from gui.settingsDialogs import NVDASettingsDialog
 import inputCore
@@ -57,8 +58,12 @@ from .settings import (
 	CONF_KEY_REPORT_UNKNOWN,
 	CONF_KEY_SHOW_CONNECTION_DURATION,
 	CONF_KEY_SHOW_CONNECTION_TYPE,
+	CONF_KEY_TRACK_CONNECTION_TIME,
 	CONF_SECTION,
 )
+from .formatting import formatDuration
+from .statsDialog import showStatistics
+from .usage import USAGE_FILE_NAME, DeviceObservation, UsageTracker
 
 addonHandler.initTranslation()
 
@@ -452,20 +457,6 @@ def _getConnectionStatus(
 	return ConnectionStatus.CONNECTED if foundStatus else ConnectionStatus.UNKNOWN
 
 
-def _formatDuration(seconds: float) -> str:
-	"""Return a spoken duration such as '45 min', '2 hr' or '1 hr 25 min'."""
-	totalMinutes = int(seconds // 60)
-	hours, minutes = divmod(totalMinutes, 60)
-	if hours == 0:
-		# Translators: A duration in minutes only, for example "45 min".
-		return _("{minutes} min").format(minutes=minutes)
-	if minutes == 0:
-		# Translators: A duration in whole hours only, for example "2 hr".
-		return _("{hours} hr").format(hours=hours)
-	# Translators: A duration in hours and minutes, for example "1 hr 25 min".
-	return _("{hours} hr {minutes} min").format(hours=hours, minutes=minutes)
-
-
 def _getConnectionSeconds(device: BluetoothDevice, now: datetime) -> float | None:
 	"""Return for how many seconds a connected device has been connected, if Windows reports it."""
 	if device.status != ConnectionStatus.CONNECTED or device.lastConnected is None:
@@ -474,8 +465,12 @@ def _getConnectionSeconds(device: BluetoothDevice, now: datetime) -> float | Non
 	return elapsed if 0 < elapsed < _MAX_CONNECTION_SECONDS else None
 
 
-def _formatDeviceReport(device: BluetoothDevice, now: datetime) -> str:
-	"""Return the spoken report of a device, according to the user's settings."""
+def _formatDeviceReport(device: BluetoothDevice, now: datetime, totalSeconds: float | None = None) -> str:
+	"""Return the spoken report of a device, according to the user's settings.
+
+	:param totalSeconds: The total connection time since the last recharge, if it is measured.
+		It is announced instead of the connection time reported by Windows.
+	"""
 	if config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] and device.connectionType is not None:
 		# Translators: Reported for each Bluetooth device when the connection type is shown.
 		# {name} is the device name, {connectionType} is the connection type (Classic or LE)
@@ -490,13 +485,13 @@ def _formatDeviceReport(device: BluetoothDevice, now: datetime) -> str:
 		# {name} is the device name and {battery} is the battery percentage.
 		report = _("{name} battery {battery} percent").format(name=device.name, battery=device.battery)
 	if config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION]:
-		seconds = _getConnectionSeconds(device, now)
+		seconds = totalSeconds if totalSeconds is not None else _getConnectionSeconds(device, now)
 		if seconds is not None:
 			# Translators: Appended to the report of a device when the connection duration is shown.
 			# {report} is the report of the device and {duration} is for example "1 hr 25 min".
 			report = _("{report} (connected {duration})").format(
 				report=report,
-				duration=_formatDuration(seconds),
+				duration=formatDuration(seconds),
 			)
 	return report
 
@@ -593,6 +588,17 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 	)
 
 
+def _toObservation(device: BluetoothDevice, now: datetime) -> DeviceObservation:
+	"""Return what the usage tracker needs to know about a device."""
+	return DeviceObservation(
+		name=device.name,
+		battery=device.battery,
+		statusRank=int(device.status),
+		disconnected=device.status == ConnectionStatus.DISCONNECTED,
+		windowsConnectionSeconds=_getConnectionSeconds(device, now),
+	)
+
+
 def _updateLowBatteryAlerts(
 	devices: list[BluetoothDevice],
 	threshold: int,
@@ -635,6 +641,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		super().__init__()
 		if BluetoothBatterySettingsPanel not in NVDASettingsDialog.categoryClasses:
 			NVDASettingsDialog.categoryClasses.append(BluetoothBatterySettingsPanel)
+		self._usageTracker = UsageTracker(os.path.join(globalVars.appArgs.configPath, USAGE_FILE_NAME))
 		self._alertedDeviceKeys: set[str] = set()
 		self._monitorLock = threading.Lock()
 		self._monitorTimer: wx.CallLater | None = core.callLater(_MONITOR_INTERVAL_MS, self._monitorTick)
@@ -643,7 +650,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""Start a background check, if needed, and schedule the next one."""
 		self._monitorTimer = core.callLater(_MONITOR_INTERVAL_MS, self._monitorTick)
 		section = config.conf[CONF_SECTION]
-		if not section[CONF_KEY_ENABLE_LOW_BATTERY_ALERT]:
+		alert: bool = section[CONF_KEY_ENABLE_LOW_BATTERY_ALERT]
+		track: bool = section[CONF_KEY_TRACK_CONNECTION_TIME]
+		if not alert and not track:
 			return
 		if not self._monitorLock.acquire(blocking=False):
 			# The previous check is still running.
@@ -651,17 +660,31 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		threshold: int = section[CONF_KEY_LOW_BATTERY_THRESHOLD]
 		threading.Thread(
 			target=self._monitorScan,
-			args=(threshold,),
+			args=(alert, track, threshold),
 			name="BluetoothBatteryReport.monitor",
 			daemon=True,
 		).start()
 
-	def _monitorScan(self, threshold: int) -> None:
-		"""Check the battery levels (runs in a background thread) and alert about low batteries."""
+	def _updateUsage(self, devices: list[BluetoothDevice], track: bool) -> None:
+		"""Give a scan to the usage tracker: the statuses, and the connection times if they are measured."""
+		now = datetime.now()
+		observations = [_toObservation(device, now) for device in devices]
+		self._usageTracker.noteStatus(observations)
+		if track:
+			self._usageTracker.update(observations)
+
+	def _getTotalSeconds(self, device: BluetoothDevice, track: bool) -> float | None:
+		"""Return the measured total connection time of a device, if it is measured and known."""
+		if not track or device.status == ConnectionStatus.DISCONNECTED:
+			return None
+		return self._usageTracker.getTotalSeconds(device.name) or None
+
+	def _monitorScan(self, alert: bool, track: bool, threshold: int) -> None:
+		"""Check the battery levels (runs in a background thread): measure times and alert about low batteries."""
 		try:
-			lowDevices = _updateLowBatteryAlerts(
-				collectBluetoothBattery(), threshold, self._alertedDeviceKeys
-			)
+			devices = collectBluetoothBattery()
+			self._updateUsage(devices, track)
+			lowDevices = _updateLowBatteryAlerts(devices, threshold, self._alertedDeviceKeys) if alert else []
 		except Exception:
 			log.exception("Error checking Bluetooth battery levels")
 			return
@@ -695,6 +718,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		super().terminate()
 
 	@script(
+		# Translators: Description for the command that opens the window with the battery statistics.
+		description=_("Opens the Bluetooth battery statistics."),
+		category=SCRIPT_CATEGORY,
+		# No gesture is assigned by default. Users can assign one in the Input Gestures dialog.
+	)
+	def script_openBatteryStatistics(self, gesture: inputCore.InputGesture) -> None:
+		# The window is modal, so it is not opened directly from the script.
+		wx.CallAfter(showStatistics)
+
+	@script(
 		# Translators: Description for the command to report Bluetooth battery levels.
 		description=_("Reports the battery percentage of all local Bluetooth devices."),
 		category=SCRIPT_CATEGORY,
@@ -702,13 +735,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		speakOnDemand=True,
 	)
 	def script_reportBluetoothBattery(self, gesture: inputCore.InputGesture) -> None:
+		track: bool = config.conf[CONF_SECTION][CONF_KEY_TRACK_CONNECTION_TIME]
 		try:
-			devices = [device for device in collectBluetoothBattery() if _isStatusReported(device.status)]
+			allDevices = collectBluetoothBattery()
+			self._updateUsage(allDevices, track)
 		except Exception:
 			log.exception("Error reporting Bluetooth battery levels")
 			# Translators: Message reported when Bluetooth battery detection fails.
 			ui.message(_("Bluetooth battery detection failed."))
 			return
+		devices = [device for device in allDevices if _isStatusReported(device.status)]
 
 		if not devices:
 			# Translators: Message reported when no Bluetooth battery information is available.
@@ -716,5 +752,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return
 
 		now = datetime.now()
-		deviceReports = [_formatDeviceReport(device, now) for device in devices]
+		deviceReports = [
+			_formatDeviceReport(device, now, self._getTotalSeconds(device, track)) for device in devices
+		]
 		ui.message("; ".join(deviceReports))
