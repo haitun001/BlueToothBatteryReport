@@ -10,6 +10,7 @@ import re
 from ctypes import POINTER, Structure, byref, c_void_p, sizeof, windll
 from ctypes.wintypes import BOOL, DWORD, HANDLE, ULONG
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, IntEnum
 
 import addonHandler
@@ -23,7 +24,7 @@ from scriptHandler import script
 import ui
 from winAPI.constants import SystemErrorCodes
 from winBindings.bthprops import BLUETOOTH_DEVICE_INFO
-from winBindings.kernel32 import CloseHandle
+from winBindings.kernel32 import SYSTEMTIME, CloseHandle
 from winBindings.setupapi import (
 	DEVPROPKEY,
 	DIGCF,
@@ -42,6 +43,7 @@ from .settings import (
 	CONF_KEY_REPORT_CONNECTED,
 	CONF_KEY_REPORT_DISCONNECTED,
 	CONF_KEY_REPORT_UNKNOWN,
+	CONF_KEY_SHOW_CONNECTION_DURATION,
 	CONF_KEY_SHOW_CONNECTION_TYPE,
 	CONF_SECTION,
 )
@@ -72,6 +74,8 @@ _DEVPROP_TYPE_UINT32 = 0x00000007
 _DEVPROP_TYPE_STRING = 0x00000012
 _DN_DEVICE_DISCONNECTED = 0x02000000
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+# The last used time of a device can be stale or reset by Windows, so longer times are not reported.
+_MAX_CONNECTION_SECONDS = 7 * 24 * 60 * 60
 
 
 class ConnectionStatus(IntEnum):
@@ -102,6 +106,14 @@ class BluetoothDevice:
 	instanceId: str
 	address: str | None = None
 	connectionType: ConnectionType | None = None
+	# When the current connection started, as reported by Windows (Bluetooth Classic devices only).
+	lastConnected: datetime | None = None
+
+
+@dataclass(frozen=True)
+class _ClassicDeviceState:
+	connected: bool
+	lastUsed: datetime | None
 
 
 @dataclass(frozen=True)
@@ -341,9 +353,30 @@ def _getConnectionType(instanceId: str) -> ConnectionType | None:
 	return None
 
 
-def _collectClassicConnectionStates() -> dict[str, bool]:
+def _systemTimeToDatetime(systemTime: SYSTEMTIME) -> datetime | None:
+	"""Convert a SYSTEMTIME to a naive local datetime, or None if it is zeroed (never used).
+
+	Despite the Windows documentation, the stLastUsed value of the classic Bluetooth API holds local time,
+	not UTC.
+	"""
+	if systemTime.wYear == 0:
+		return None
+	try:
+		return datetime(
+			systemTime.wYear,
+			systemTime.wMonth,
+			systemTime.wDay,
+			systemTime.wHour,
+			systemTime.wMinute,
+			systemTime.wSecond,
+		)
+	except ValueError:
+		return None
+
+
+def _collectClassicConnectionStates() -> dict[str, _ClassicDeviceState]:
 	"""Return connection states reported by the classic Bluetooth API."""
-	results: dict[str, bool] = {}
+	results: dict[str, _ClassicDeviceState] = {}
 	radioParams = BLUETOOTH_FIND_RADIO_PARAMS()
 	radioHandle = HANDLE()
 	radioFindHandle = _BluetoothFindFirstRadio(byref(radioParams), byref(radioHandle))
@@ -357,7 +390,10 @@ def _collectClassicConnectionStates() -> dict[str, bool]:
 			if deviceFindHandle:
 				try:
 					while True:
-						results[f"{deviceInfo.address:012X}"] = bool(deviceInfo.fConnected)
+						results[f"{deviceInfo.address:012X}"] = _ClassicDeviceState(
+							connected=bool(deviceInfo.fConnected),
+							lastUsed=_systemTimeToDatetime(deviceInfo.stLastUsed),
+						)
 						if not _BluetoothFindNextDevice(deviceFindHandle, byref(deviceInfo)):
 							break
 				finally:
@@ -377,11 +413,11 @@ def _getConnectionStatus(
 	address: str | None,
 	nodeDevInst: int,
 	rootDevInst: int | None,
-	classicConnectionStates: dict[str, bool],
+	classicConnectionStates: dict[str, _ClassicDeviceState],
 ) -> ConnectionStatus:
 	"""Return the best known connection status for a device."""
 	if address is not None and address in classicConnectionStates:
-		if classicConnectionStates[address]:
+		if classicConnectionStates[address].connected:
 			return ConnectionStatus.CONNECTED
 		return ConnectionStatus.DISCONNECTED
 
@@ -400,6 +436,55 @@ def _getConnectionStatus(
 		if status & _DN_DEVICE_DISCONNECTED:
 			return ConnectionStatus.DISCONNECTED
 	return ConnectionStatus.CONNECTED if foundStatus else ConnectionStatus.UNKNOWN
+
+
+def _formatDuration(seconds: float) -> str:
+	"""Return a spoken duration such as '45 min', '2 hr' or '1 hr 25 min'."""
+	totalMinutes = int(seconds // 60)
+	hours, minutes = divmod(totalMinutes, 60)
+	if hours == 0:
+		# Translators: A duration in minutes only, for example "45 min".
+		return _("{minutes} min").format(minutes=minutes)
+	if minutes == 0:
+		# Translators: A duration in whole hours only, for example "2 hr".
+		return _("{hours} hr").format(hours=hours)
+	# Translators: A duration in hours and minutes, for example "1 hr 25 min".
+	return _("{hours} hr {minutes} min").format(hours=hours, minutes=minutes)
+
+
+def _getConnectionSeconds(device: BluetoothDevice, now: datetime) -> float | None:
+	"""Return for how many seconds a connected device has been connected, if Windows reports it."""
+	if device.status != ConnectionStatus.CONNECTED or device.lastConnected is None:
+		return None
+	elapsed = (now - device.lastConnected).total_seconds()
+	return elapsed if 0 < elapsed < _MAX_CONNECTION_SECONDS else None
+
+
+def _formatDeviceReport(device: BluetoothDevice, now: datetime) -> str:
+	"""Return the spoken report of a device, according to the user's settings."""
+	if config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] and device.connectionType is not None:
+		# Translators: Reported for each Bluetooth device when the connection type is shown.
+		# {name} is the device name, {connectionType} is the connection type (Classic or LE)
+		# and {battery} is the battery percentage.
+		report = _("{name} ({connectionType}) battery {battery} percent").format(
+			name=device.name,
+			connectionType=device.connectionType.value,
+			battery=device.battery,
+		)
+	else:
+		# Translators: Reported for each Bluetooth device.
+		# {name} is the device name and {battery} is the battery percentage.
+		report = _("{name} battery {battery} percent").format(name=device.name, battery=device.battery)
+	if config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION]:
+		seconds = _getConnectionSeconds(device, now)
+		if seconds is not None:
+			# Translators: Appended to the report of a device when the connection duration is shown.
+			# {report} is the report of the device and {duration} is for example "1 hr 25 min".
+			report = _("{report} (connected {duration})").format(
+				report=report,
+				duration=_formatDuration(seconds),
+			)
+	return report
 
 
 def _isStatusReported(status: ConnectionStatus) -> bool:
@@ -477,6 +562,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			rootDevInsts.get(candidate.address or ""),
 			classicConnectionStates,
 		)
+		classicState = classicConnectionStates.get(candidate.address or "")
 		key = candidate.address or candidate.instanceId
 		finalDevices[key] = BluetoothDevice(
 			name=name,
@@ -485,6 +571,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			instanceId=candidate.instanceId,
 			address=candidate.address,
 			connectionType=rootConnectionTypes.get(candidate.address or "", candidate.connectionType),
+			lastConnected=classicState.lastUsed if classicState is not None else None,
 		)
 	return sorted(
 		finalDevices.values(),
@@ -526,24 +613,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			ui.message(_("No Bluetooth battery information is available."))
 			return
 
-		showConnectionType = config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE]
-		deviceReports: list[str] = []
-		for device in devices:
-			if showConnectionType and device.connectionType is not None:
-				deviceReports.append(
-					# Translators: Reported for each Bluetooth device when the connection type is shown.
-					# {name} is the device name, {connectionType} is the connection type (Classic or LE)
-					# and {battery} is the battery percentage.
-					_("{name} ({connectionType}) battery {battery} percent").format(
-						name=device.name,
-						connectionType=device.connectionType.value,
-						battery=device.battery,
-					),
-				)
-				continue
-			deviceReports.append(
-				# Translators: Reported for each Bluetooth device.
-				# {name} is the device name and {battery} is the battery percentage.
-				_("{name} battery {battery} percent").format(name=device.name, battery=device.battery),
-			)
+		now = datetime.now()
+		deviceReports = [_formatDeviceReport(device, now) for device in devices]
 		ui.message("; ".join(deviceReports))

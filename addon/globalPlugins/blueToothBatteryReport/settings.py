@@ -21,6 +21,7 @@ CONF_KEY_REPORT_CONNECTED: str = "reportConnected"
 CONF_KEY_REPORT_UNKNOWN: str = "reportUnknown"
 CONF_KEY_REPORT_DISCONNECTED: str = "reportDisconnected"
 CONF_KEY_SHOW_CONNECTION_TYPE: str = "showConnectionType"
+CONF_KEY_SHOW_CONNECTION_DURATION: str = "showConnectionDuration"
 
 config.conf.spec[CONF_SECTION] = {
 	CONF_KEY_ONLY_REPORT_CONNECTED: "boolean(default=false)",
@@ -28,6 +29,7 @@ config.conf.spec[CONF_SECTION] = {
 	CONF_KEY_REPORT_UNKNOWN: "boolean(default=true)",
 	CONF_KEY_REPORT_DISCONNECTED: "boolean(default=true)",
 	CONF_KEY_SHOW_CONNECTION_TYPE: "boolean(default=false)",
+	CONF_KEY_SHOW_CONNECTION_DURATION: "boolean(default=false)",
 }
 
 
@@ -74,8 +76,19 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 		)
 		self._showConnectionTypeCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE])
 
+		self._showConnectionDurationCheckbox: wx.CheckBox = helper.addItem(
+			# Translators: A checkbox to toggle whether the time a device has been connected is reported.
+			wx.CheckBox(self, label=_("Show connection &duration")),
+		)
+		self._showConnectionDurationCheckbox.SetValue(
+			config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION],
+		)
+
 	def onSave(self) -> None:
 		config.conf[CONF_SECTION][CONF_KEY_REPORT_CONNECTED] = self._reportConnectedCheckbox.GetValue()
 		config.conf[CONF_SECTION][CONF_KEY_REPORT_UNKNOWN] = self._reportUnknownCheckbox.GetValue()
 		config.conf[CONF_SECTION][CONF_KEY_REPORT_DISCONNECTED] = self._reportDisconnectedCheckbox.GetValue()
 		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] = self._showConnectionTypeCheckbox.GetValue()
+		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_DURATION] = (
+			self._showConnectionDurationCheckbox.GetValue()
+		)
