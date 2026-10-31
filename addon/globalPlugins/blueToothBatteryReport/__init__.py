@@ -39,7 +39,9 @@ from winBindings.setupapi import (
 
 from .settings import (
 	BluetoothBatterySettingsPanel,
-	CONF_KEY_ONLY_REPORT_CONNECTED,
+	CONF_KEY_REPORT_CONNECTED,
+	CONF_KEY_REPORT_DISCONNECTED,
+	CONF_KEY_REPORT_UNKNOWN,
 	CONF_KEY_SHOW_CONNECTION_TYPE,
 	CONF_SECTION,
 )
@@ -76,6 +78,13 @@ class ConnectionStatus(IntEnum):
 	CONNECTED = 0
 	UNKNOWN = 1
 	DISCONNECTED = 2
+
+
+_STATUS_REPORT_CONF_KEYS: dict[ConnectionStatus, str] = {
+	ConnectionStatus.CONNECTED: CONF_KEY_REPORT_CONNECTED,
+	ConnectionStatus.UNKNOWN: CONF_KEY_REPORT_UNKNOWN,
+	ConnectionStatus.DISCONNECTED: CONF_KEY_REPORT_DISCONNECTED,
+}
 
 
 class ConnectionType(Enum):
@@ -393,9 +402,16 @@ def _getConnectionStatus(
 	return ConnectionStatus.CONNECTED if foundStatus else ConnectionStatus.UNKNOWN
 
 
+def _isStatusReported(status: ConnectionStatus) -> bool:
+	"""Return whether the user wants devices with this connection status to be reported."""
+	return config.conf[CONF_SECTION][_STATUS_REPORT_CONF_KEYS[status]]
+
+
 def collectBluetoothBattery() -> list[BluetoothDevice]:
 	"""
 	Collect Bluetooth devices with reported battery percentages.
+
+	The result is not filtered by the "report ... devices" settings, see :func:`_isStatusReported`.
 
 	:return: Bluetooth devices sorted by connection status and name.
 	:raises OSError: If SetupAPI device enumeration fails.
@@ -461,8 +477,6 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			rootDevInsts.get(candidate.address or ""),
 			classicConnectionStates,
 		)
-		if config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] and status != ConnectionStatus.CONNECTED:
-			continue
 		key = candidate.address or candidate.instanceId
 		finalDevices[key] = BluetoothDevice(
 			name=name,
@@ -500,7 +514,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	)
 	def script_reportBluetoothBattery(self, gesture: inputCore.InputGesture) -> None:
 		try:
-			devices = collectBluetoothBattery()
+			devices = [device for device in collectBluetoothBattery() if _isStatusReported(device.status)]
 		except Exception:
 			log.exception("Error reporting Bluetooth battery levels")
 			# Translators: Message reported when Bluetooth battery detection fails.

@@ -25,8 +25,12 @@ If **Show connection type** is enabled, the connection type is added after the d
 
 The settings are in the Bluetooth Battery Report category of the NVDA Settings dialog.
 
-- **Only report connected devices**: Only announce devices that are currently connected. By default, connected, unknown and disconnected devices are announced.
+- **Report connected devices**: Announce devices that are currently connected.
+- **Report unknown status devices**: Announce devices whose connection status cannot be determined.
+- **Report disconnected devices**: Announce paired devices that are not connected.
 - **Show connection type (Classic or LE)**: Announce whether each device uses Bluetooth Classic or Bluetooth Low Energy (LE).
+
+The three report options are enabled by default. Earlier versions had a single "Only report connected devices" option. If it was enabled, the unknown and disconnected options are turned off automatically.
 
 ## Contact
 
