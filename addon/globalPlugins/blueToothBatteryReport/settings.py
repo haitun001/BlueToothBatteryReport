@@ -16,9 +16,11 @@ addonHandler.initTranslation()
 
 CONF_SECTION: str = "bluetoothBatteryReport"
 CONF_KEY_ONLY_REPORT_CONNECTED: str = "onlyReportConnected"
+CONF_KEY_SHOW_CONNECTION_TYPE: str = "showConnectionType"
 
 config.conf.spec[CONF_SECTION] = {
 	CONF_KEY_ONLY_REPORT_CONNECTED: "boolean(default=false)",
+	CONF_KEY_SHOW_CONNECTION_TYPE: "boolean(default=false)",
 }
 
 
@@ -34,7 +36,14 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
 		)
 		self._onlyReportConnectedCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED])
 
+		self._showConnectionTypeCheckbox: wx.CheckBox = helper.addItem(
+			# Translators: A checkbox to toggle whether the connection type (Classic or LE) of each device is reported.
+			wx.CheckBox(self, label=_("Show connection &type (Classic or LE)")),
+		)
+		self._showConnectionTypeCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE])
+
 	def onSave(self) -> None:
 		config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] = (
 			self._onlyReportConnectedCheckbox.GetValue()
 		)
+		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] = self._showConnectionTypeCheckbox.GetValue()

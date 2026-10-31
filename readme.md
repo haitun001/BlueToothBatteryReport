@@ -16,6 +16,18 @@ When battery information is available, each device is announced as:
 
 - `device name battery xx percent`
 
+If **Show connection type** is enabled, the connection type is added after the device name:
+
+- `device name (Classic) battery xx percent`
+- `device name (LE) battery xx percent`
+
+## Settings
+
+The settings are in the Bluetooth Battery Report category of the NVDA Settings dialog.
+
+- **Only report connected devices**: Only announce devices that are currently connected. By default, connected, unknown and disconnected devices are announced.
+- **Show connection type (Classic or LE)**: Announce whether each device uses Bluetooth Classic or Bluetooth Low Energy (LE).
+
 ## Contact
 
 - Email: `haitun940624zx@gmail.com`
