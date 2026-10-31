@@ -10,7 +10,7 @@ import re
 from ctypes import POINTER, Structure, byref, c_void_p, sizeof, windll
 from ctypes.wintypes import BOOL, DWORD, HANDLE, ULONG
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum, IntEnum
 
 import addonHandler
 from comtypes import GUID
@@ -39,7 +39,10 @@ from winBindings.setupapi import (
 
 from .settings import (
 	BluetoothBatterySettingsPanel,
-	CONF_KEY_ONLY_REPORT_CONNECTED,
+	CONF_KEY_REPORT_CONNECTED,
+	CONF_KEY_REPORT_DISCONNECTED,
+	CONF_KEY_REPORT_UNKNOWN,
+	CONF_KEY_SHOW_CONNECTION_TYPE,
 	CONF_SECTION,
 )
 
@@ -77,6 +80,20 @@ class ConnectionStatus(IntEnum):
 	DISCONNECTED = 2
 
 
+_STATUS_REPORT_CONF_KEYS: dict[ConnectionStatus, str] = {
+	ConnectionStatus.CONNECTED: CONF_KEY_REPORT_CONNECTED,
+	ConnectionStatus.UNKNOWN: CONF_KEY_REPORT_UNKNOWN,
+	ConnectionStatus.DISCONNECTED: CONF_KEY_REPORT_DISCONNECTED,
+}
+
+
+class ConnectionType(Enum):
+	"""The kind of Bluetooth connection a device uses."""
+
+	CLASSIC = "Classic"
+	LE = "LE"
+
+
 @dataclass(frozen=True)
 class BluetoothDevice:
 	name: str
@@ -84,6 +101,7 @@ class BluetoothDevice:
 	status: ConnectionStatus
 	instanceId: str
 	address: str | None = None
+	connectionType: ConnectionType | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +111,7 @@ class _BluetoothBatteryCandidate:
 	instanceId: str
 	devInst: int
 	address: str | None
+	connectionType: ConnectionType | None
 
 
 class BLUETOOTH_FIND_RADIO_PARAMS(Structure):
@@ -312,6 +331,16 @@ def _extractBluetoothAddress(instanceId: str) -> str | None:
 	return None
 
 
+def _getConnectionType(instanceId: str) -> ConnectionType | None:
+	"""Return the connection type implied by a device instance ID."""
+	upperId = instanceId.upper()
+	if upperId.startswith("BTHENUM\\"):
+		return ConnectionType.CLASSIC
+	if upperId.startswith(("BTHLE\\", "BTHLEDEVICE\\")):
+		return ConnectionType.LE
+	return None
+
+
 def _collectClassicConnectionStates() -> dict[str, bool]:
 	"""Return connection states reported by the classic Bluetooth API."""
 	results: dict[str, bool] = {}
@@ -373,9 +402,16 @@ def _getConnectionStatus(
 	return ConnectionStatus.CONNECTED if foundStatus else ConnectionStatus.UNKNOWN
 
 
+def _isStatusReported(status: ConnectionStatus) -> bool:
+	"""Return whether the user wants devices with this connection status to be reported."""
+	return config.conf[CONF_SECTION][_STATUS_REPORT_CONF_KEYS[status]]
+
+
 def collectBluetoothBattery() -> list[BluetoothDevice]:
 	"""
 	Collect Bluetooth devices with reported battery percentages.
+
+	The result is not filtered by the "report ... devices" settings, see :func:`_isStatusReported`.
 
 	:return: Bluetooth devices sorted by connection status and name.
 	:raises OSError: If SetupAPI device enumeration fails.
@@ -387,6 +423,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 
 	rootNames: dict[str, str] = {}
 	rootDevInsts: dict[str, int] = {}
+	rootConnectionTypes: dict[str, ConnectionType | None] = {}
 	batteryCandidates: list[_BluetoothBatteryCandidate] = []
 	try:
 		index = 0
@@ -412,6 +449,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			if upperId.startswith(_BLUETOOTH_ROOT_INSTANCE_ID_PREFIXES) and address is not None:
 				rootNames[address] = name
 				rootDevInsts[address] = devInst
+				rootConnectionTypes[address] = _getConnectionType(instanceId)
 
 			battery = _readBatteryPercentFromDevInst(devInst)
 			if battery is None:
@@ -423,6 +461,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 					instanceId=instanceId,
 					devInst=devInst,
 					address=address,
+					connectionType=_getConnectionType(instanceId),
 				),
 			)
 	finally:
@@ -438,8 +477,6 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			rootDevInsts.get(candidate.address or ""),
 			classicConnectionStates,
 		)
-		if config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] and status != ConnectionStatus.CONNECTED:
-			continue
 		key = candidate.address or candidate.instanceId
 		finalDevices[key] = BluetoothDevice(
 			name=name,
@@ -447,6 +484,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 			status=status,
 			instanceId=candidate.instanceId,
 			address=candidate.address,
+			connectionType=rootConnectionTypes.get(candidate.address or "", candidate.connectionType),
 		)
 	return sorted(
 		finalDevices.values(),
@@ -476,7 +514,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	)
 	def script_reportBluetoothBattery(self, gesture: inputCore.InputGesture) -> None:
 		try:
-			devices = collectBluetoothBattery()
+			devices = [device for device in collectBluetoothBattery() if _isStatusReported(device.status)]
 		except Exception:
 			log.exception("Error reporting Bluetooth battery levels")
 			# Translators: Message reported when Bluetooth battery detection fails.
@@ -488,8 +526,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			ui.message(_("No Bluetooth battery information is available."))
 			return
 
+		showConnectionType = config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE]
 		deviceReports: list[str] = []
 		for device in devices:
+			if showConnectionType and device.connectionType is not None:
+				deviceReports.append(
+					# Translators: Reported for each Bluetooth device when the connection type is shown.
+					# {name} is the device name, {connectionType} is the connection type (Classic or LE)
+					# and {battery} is the battery percentage.
+					_("{name} ({connectionType}) battery {battery} percent").format(
+						name=device.name,
+						connectionType=device.connectionType.value,
+						battery=device.battery,
+					),
+				)
+				continue
 			deviceReports.append(
 				# Translators: Reported for each Bluetooth device.
 				# {name} is the device name and {battery} is the battery percentage.

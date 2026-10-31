@@ -1,0 +1,176 @@
+diff --git a/addon/globalPlugins/blueToothBatteryReport/__init__.py b/addon/globalPlugins/blueToothBatteryReport/__init__.py
+index 5a2724b..dcdc3c4 100644
+--- a/addon/globalPlugins/blueToothBatteryReport/__init__.py
++++ b/addon/globalPlugins/blueToothBatteryReport/__init__.py
+@@ -10,7 +10,7 @@ import re
+ from ctypes import POINTER, Structure, byref, c_void_p, sizeof, windll
+ from ctypes.wintypes import BOOL, DWORD, HANDLE, ULONG
+ from dataclasses import dataclass
+-from enum import IntEnum
++from enum import Enum, IntEnum
+ 
+ import addonHandler
+ from comtypes import GUID
+@@ -40,6 +40,7 @@ from winBindings.setupapi import (
+ from .settings import (
+ 	BluetoothBatterySettingsPanel,
+ 	CONF_KEY_ONLY_REPORT_CONNECTED,
++	CONF_KEY_SHOW_CONNECTION_TYPE,
+ 	CONF_SECTION,
+ )
+ 
+@@ -77,6 +78,13 @@ class ConnectionStatus(IntEnum):
+ 	DISCONNECTED = 2
+ 
+ 
++class ConnectionType(Enum):
++	"""The kind of Bluetooth connection a device uses."""
++
++	CLASSIC = "Classic"
++	LE = "LE"
++
++
+ @dataclass(frozen=True)
+ class BluetoothDevice:
+ 	name: str
+@@ -84,6 +92,7 @@ class BluetoothDevice:
+ 	status: ConnectionStatus
+ 	instanceId: str
+ 	address: str | None = None
++	connectionType: ConnectionType | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -93,6 +102,7 @@ class _BluetoothBatteryCandidate:
+ 	instanceId: str
+ 	devInst: int
+ 	address: str | None
++	connectionType: ConnectionType | None
+ 
+ 
+ class BLUETOOTH_FIND_RADIO_PARAMS(Structure):
+@@ -312,6 +322,16 @@ def _extractBluetoothAddress(instanceId: str) -> str | None:
+ 	return None
+ 
+ 
++def _getConnectionType(instanceId: str) -> ConnectionType | None:
++	"""Return the connection type implied by a device instance ID."""
++	upperId = instanceId.upper()
++	if upperId.startswith("BTHENUM\\"):
++		return ConnectionType.CLASSIC
++	if upperId.startswith(("BTHLE\\", "BTHLEDEVICE\\")):
++		return ConnectionType.LE
++	return None
++
++
+ def _collectClassicConnectionStates() -> dict[str, bool]:
+ 	"""Return connection states reported by the classic Bluetooth API."""
+ 	results: dict[str, bool] = {}
+@@ -387,6 +407,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
+ 
+ 	rootNames: dict[str, str] = {}
+ 	rootDevInsts: dict[str, int] = {}
++	rootConnectionTypes: dict[str, ConnectionType | None] = {}
+ 	batteryCandidates: list[_BluetoothBatteryCandidate] = []
+ 	try:
+ 		index = 0
+@@ -412,6 +433,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
+ 			if upperId.startswith(_BLUETOOTH_ROOT_INSTANCE_ID_PREFIXES) and address is not None:
+ 				rootNames[address] = name
+ 				rootDevInsts[address] = devInst
++				rootConnectionTypes[address] = _getConnectionType(instanceId)
+ 
+ 			battery = _readBatteryPercentFromDevInst(devInst)
+ 			if battery is None:
+@@ -423,6 +445,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
+ 					instanceId=instanceId,
+ 					devInst=devInst,
+ 					address=address,
++					connectionType=_getConnectionType(instanceId),
+ 				),
+ 			)
+ 	finally:
+@@ -447,6 +470,7 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
+ 			status=status,
+ 			instanceId=candidate.instanceId,
+ 			address=candidate.address,
++			connectionType=rootConnectionTypes.get(candidate.address or "", candidate.connectionType),
+ 		)
+ 	return sorted(
+ 		finalDevices.values(),
+@@ -488,8 +512,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+ 			ui.message(_("No Bluetooth battery information is available."))
+ 			return
+ 
++		showConnectionType = config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE]
+ 		deviceReports: list[str] = []
+ 		for device in devices:
++			if showConnectionType and device.connectionType is not None:
++				deviceReports.append(
++					# Translators: Reported for each Bluetooth device when the connection type is shown.
++					# {name} is the device name, {connectionType} is the connection type (Classic or LE)
++					# and {battery} is the battery percentage.
++					_("{name} ({connectionType}) battery {battery} percent").format(
++						name=device.name,
++						connectionType=device.connectionType.value,
++						battery=device.battery,
++					),
++				)
++				continue
+ 			deviceReports.append(
+ 				# Translators: Reported for each Bluetooth device.
+ 				# {name} is the device name and {battery} is the battery percentage.
+diff --git a/addon/globalPlugins/blueToothBatteryReport/settings.py b/addon/globalPlugins/blueToothBatteryReport/settings.py
+index e0d522f..92fa41a 100644
+--- a/addon/globalPlugins/blueToothBatteryReport/settings.py
++++ b/addon/globalPlugins/blueToothBatteryReport/settings.py
+@@ -16,9 +16,11 @@ addonHandler.initTranslation()
+ 
+ CONF_SECTION: str = "bluetoothBatteryReport"
+ CONF_KEY_ONLY_REPORT_CONNECTED: str = "onlyReportConnected"
++CONF_KEY_SHOW_CONNECTION_TYPE: str = "showConnectionType"
+ 
+ config.conf.spec[CONF_SECTION] = {
+ 	CONF_KEY_ONLY_REPORT_CONNECTED: "boolean(default=false)",
++	CONF_KEY_SHOW_CONNECTION_TYPE: "boolean(default=false)",
+ }
+ 
+ 
+@@ -34,7 +36,14 @@ class BluetoothBatterySettingsPanel(SettingsPanel):
+ 		)
+ 		self._onlyReportConnectedCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED])
+ 
++		self._showConnectionTypeCheckbox: wx.CheckBox = helper.addItem(
++			# Translators: A checkbox to toggle whether the connection type (Classic or LE) of each device is reported.
++			wx.CheckBox(self, label=_("Show connection &type (Classic or LE)")),
++		)
++		self._showConnectionTypeCheckbox.SetValue(config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE])
++
+ 	def onSave(self) -> None:
+ 		config.conf[CONF_SECTION][CONF_KEY_ONLY_REPORT_CONNECTED] = (
+ 			self._onlyReportConnectedCheckbox.GetValue()
+ 		)
++		config.conf[CONF_SECTION][CONF_KEY_SHOW_CONNECTION_TYPE] = self._showConnectionTypeCheckbox.GetValue()
+diff --git a/readme.md b/readme.md
+index 90b8d78..b83a41b 100644
+--- a/readme.md
++++ b/readme.md
+@@ -16,6 +16,18 @@ When battery information is available, each device is announced as:
+ 
+ - `device name battery xx percent`
+ 
++If **Show connection type** is enabled, the connection type is added after the device name:
++
++- `device name (Classic) battery xx percent`
++- `device name (LE) battery xx percent`
++
++## Settings
++
++The settings are in the Bluetooth Battery Report category of the NVDA Settings dialog.
++
++- **Only report connected devices**: Only announce devices that are currently connected. By default, connected, unknown and disconnected devices are announced.
++- **Show connection type (Classic or LE)**: Announce whether each device uses Bluetooth Classic or Bluetooth Low Energy (LE).
++
+ ## Contact
+ 
+ - Email: `haitun940624zx@gmail.com`
