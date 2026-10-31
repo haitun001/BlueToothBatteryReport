@@ -34,8 +34,15 @@ The settings are in the Bluetooth Battery Report category of the NVDA Settings d
 - **Report disconnected devices**: Announce paired devices that are not connected.
 - **Show connection type (Classic or LE)**: Announce whether each device uses Bluetooth Classic or Bluetooth Low Energy (LE).
 - **Show connection duration**: Announce for how long a connected device has been connected, as reported by Windows. Windows only provides this for Bluetooth Classic devices, not for Bluetooth LE devices.
+- **Enable low battery alert**: Give an alert when the battery of a connected device is low (disabled by default). See below.
+- **Low battery threshold**: The battery percentage at or below which the alert is given, from 5 to 50 (20 by default).
+- **Alert sound**: Choose a beep, or a custom .wav file that you select with the **Browse** button. If the file cannot be played, a beep is used.
 
 The three report options are enabled by default. Earlier versions had a single "Only report connected devices" option. If it was enabled, the unknown and disconnected options are turned off automatically.
+
+## Low Battery Alert
+
+When the low battery alert is enabled, the add-on checks the battery levels in the background every 5 minutes. If the battery of a connected device is at or below the threshold, the alert sound is played and a warning dialog is shown. Each device only triggers one alert until its battery is above the threshold again.
 
 ## Contact
 

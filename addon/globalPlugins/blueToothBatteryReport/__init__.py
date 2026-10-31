@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import re
+import threading
 from ctypes import POINTER, Structure, byref, c_void_p, sizeof, windll
 from ctypes.wintypes import BOOL, DWORD, HANDLE, ULONG
 from dataclasses import dataclass
@@ -16,11 +18,15 @@ from enum import Enum, IntEnum
 import addonHandler
 from comtypes import GUID
 import config
+import core
 import globalPluginHandler
+from gui.message import MessageDialog
 from gui.settingsDialogs import NVDASettingsDialog
 import inputCore
 from logHandler import log
+import nvwave
 from scriptHandler import script
+import tones
 import ui
 from winAPI.constants import SystemErrorCodes
 from winBindings.bthprops import BLUETOOTH_DEVICE_INFO
@@ -37,9 +43,15 @@ from winBindings.setupapi import (
 	SetupDiGetDeviceProperty,
 	SetupDiGetDeviceRegistryProperty,
 )
+import wx
 
 from .settings import (
+	ALERT_SOUND_CUSTOM,
 	BluetoothBatterySettingsPanel,
+	CONF_KEY_ALERT_SOUND_MODE,
+	CONF_KEY_ALERT_SOUND_PATH,
+	CONF_KEY_ENABLE_LOW_BATTERY_ALERT,
+	CONF_KEY_LOW_BATTERY_THRESHOLD,
 	CONF_KEY_REPORT_CONNECTED,
 	CONF_KEY_REPORT_DISCONNECTED,
 	CONF_KEY_REPORT_UNKNOWN,
@@ -76,6 +88,8 @@ _DN_DEVICE_DISCONNECTED = 0x02000000
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 # The last used time of a device can be stale or reset by Windows, so longer times are not reported.
 _MAX_CONNECTION_SECONDS = 7 * 24 * 60 * 60
+# How often the battery levels are checked in the background for the low battery alert.
+_MONITOR_INTERVAL_MS = 5 * 60 * 1000
 
 
 class ConnectionStatus(IntEnum):
@@ -579,13 +593,101 @@ def collectBluetoothBattery() -> list[BluetoothDevice]:
 	)
 
 
+def _updateLowBatteryAlerts(
+	devices: list[BluetoothDevice],
+	threshold: int,
+	alertedKeys: set[str],
+) -> list[BluetoothDevice]:
+	"""Return the connected devices whose battery just became low, and update `alertedKeys`.
+
+	A device is only returned once, until its battery recovers above the threshold or it is gone.
+	"""
+	lowDevices: list[BluetoothDevice] = []
+	currentKeys: set[str] = set()
+	for device in devices:
+		key = device.address or device.instanceId
+		currentKeys.add(key)
+		if device.battery > threshold:
+			alertedKeys.discard(key)
+		elif device.status == ConnectionStatus.CONNECTED and key not in alertedKeys:
+			alertedKeys.add(key)
+			lowDevices.append(device)
+	alertedKeys.intersection_update(currentKeys)
+	return lowDevices
+
+
+def _playAlertSound() -> None:
+	"""Play the configured low battery alert sound. A beep is played if there is no usable sound file."""
+	section = config.conf[CONF_SECTION]
+	if section[CONF_KEY_ALERT_SOUND_MODE] == ALERT_SOUND_CUSTOM:
+		path = section[CONF_KEY_ALERT_SOUND_PATH]
+		if path and os.path.isfile(path):
+			try:
+				nvwave.playWaveFile(path)
+				return
+			except Exception:
+				log.debugWarning(f"Could not play the alert sound {path!r}", exc_info=True)
+	tones.beep(500, 400)
+
+
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self) -> None:
 		super().__init__()
 		if BluetoothBatterySettingsPanel not in NVDASettingsDialog.categoryClasses:
 			NVDASettingsDialog.categoryClasses.append(BluetoothBatterySettingsPanel)
+		self._alertedDeviceKeys: set[str] = set()
+		self._monitorLock = threading.Lock()
+		self._monitorTimer: wx.CallLater | None = core.callLater(_MONITOR_INTERVAL_MS, self._monitorTick)
+
+	def _monitorTick(self) -> None:
+		"""Start a background check, if needed, and schedule the next one."""
+		self._monitorTimer = core.callLater(_MONITOR_INTERVAL_MS, self._monitorTick)
+		section = config.conf[CONF_SECTION]
+		if not section[CONF_KEY_ENABLE_LOW_BATTERY_ALERT]:
+			return
+		if not self._monitorLock.acquire(blocking=False):
+			# The previous check is still running.
+			return
+		threshold: int = section[CONF_KEY_LOW_BATTERY_THRESHOLD]
+		threading.Thread(
+			target=self._monitorScan,
+			args=(threshold,),
+			name="BluetoothBatteryReport.monitor",
+			daemon=True,
+		).start()
+
+	def _monitorScan(self, threshold: int) -> None:
+		"""Check the battery levels (runs in a background thread) and alert about low batteries."""
+		try:
+			lowDevices = _updateLowBatteryAlerts(
+				collectBluetoothBattery(), threshold, self._alertedDeviceKeys
+			)
+		except Exception:
+			log.exception("Error checking Bluetooth battery levels")
+			return
+		finally:
+			self._monitorLock.release()
+		if lowDevices:
+			wx.CallAfter(self._showLowBatteryAlert, lowDevices)
+
+	def _showLowBatteryAlert(self, devices: list[BluetoothDevice]) -> None:
+		_playAlertSound()
+		lines = [
+			# Translators: Part of the low battery alert, one line per device.
+			# {name} is the device name and {battery} is the battery percentage.
+			_("{name} battery low: {battery} percent").format(name=device.name, battery=device.battery)
+			for device in devices
+		]
+		MessageDialog.alert(
+			"\n".join(lines),
+			# Translators: The title of the low battery alert dialog.
+			_("Bluetooth Battery Low"),
+		)
 
 	def terminate(self) -> None:
+		if self._monitorTimer is not None:
+			self._monitorTimer.Stop()
+			self._monitorTimer = None
 		try:
 			NVDASettingsDialog.categoryClasses.remove(BluetoothBatterySettingsPanel)
 		except ValueError:
